@@ -1,3 +1,3 @@
 [workspace]
 resolver = "2"
-members = ["nv1-ros-communicator"]
+members = ["nv1-ros-communicator", "nv1-ros-onnx"]

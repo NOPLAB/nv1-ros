@@ -548,6 +548,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "nv1-ros-onnx"
+version = "0.1.0"
+dependencies = [
+ "futures",
+ "r2r",
+ "tokio",
+]
+
+[[package]]
 name = "object"
 version = "0.36.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
