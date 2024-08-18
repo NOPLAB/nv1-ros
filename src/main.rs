@@ -1,73 +1,71 @@
-use futures::{future, stream::StreamExt};
+use futures::stream::StreamExt;
 use r2r::QosProfile;
 
-use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tokio::task;
 
-#[derive(Debug, Default)]
-struct SharedState {
-    pub state: i32,
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct Serial {
+    x: f32,
+    y: f32,
+    angle: f32,
+    kick: bool,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+union SerialData {
+    serial: Serial,
+    buffer: [u8; size_of::<Serial>()],
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = r2r::Context::create()?;
-    let mut node = r2r::Node::create(ctx, "testnode", "")?;
-    let mut sub = node.subscribe::<r2r::std_msgs::msg::String>("/topic", QosProfile::default())?;
-    let p =
-        node.create_publisher::<r2r::std_msgs::msg::String>("/topic2", QosProfile::default())?;
-    let state = Arc::new(Mutex::new(SharedState::default()));
+    let mut node = r2r::Node::create(ctx, "nv1_ros_communicator", "")?;
 
-    // task that every other time forwards message to topic2
-    let state_t1 = state.clone();
+    let mut sub_teleop =
+        node.subscribe::<r2r::geometry_msgs::msg::Twist>("/cmd_vel", QosProfile::default())?;
+
     task::spawn(async move {
-        let mut x: i32 = 0;
+        let ports = serialport::available_ports().expect("No ports found!");
+        for p in ports {
+            println!("{}", p.port_name);
+        }
+
+        let mut port = serialport::new("/dev/ttyTCU0", 115200)
+            .timeout(Duration::from_millis(10))
+            .open()
+            .expect("Failed to open port");
+
         loop {
-            match sub.next().await {
+            match sub_teleop.next().await {
                 Some(msg) => {
-                    if x % 2 == 0 {
-                        p.publish(&r2r::std_msgs::msg::String {
-                            data: format!("({}): new msg: {}", x, msg.data),
-                        })
-                        .unwrap();
-                    } else {
-                        // update shared state
-                        state_t1.lock().unwrap().state = x;
-                    }
+                    println!("{:#?}", msg);
+
+                    let serial = Serial {
+                        x: msg.linear.x as f32,
+                        y: msg.linear.z as f32,
+                        angle: msg.angular.z as f32,
+                        kick: false,
+                    };
+
+                    let encode = SerialData { serial: serial };
+
+                    let mut cobs_encoded = [0u8; 64];
+                    let encode_len =
+                        corncobs::encode_buf(&unsafe { encode.buffer }, &mut cobs_encoded);
+
+                    port.write(&cobs_encoded[..encode_len]).unwrap();
+
+                    println!("{:?}", &cobs_encoded[..encode_len])
                 }
                 None => break,
             }
-            x += 1;
         }
     });
 
-    // for sub2 we just print the data
-    let sub2 = node.subscribe::<r2r::std_msgs::msg::String>("/topic2", QosProfile::default())?;
-    task::spawn(async move {
-        sub2.for_each(|msg| {
-            println!("topic2: new msg: {}", msg.data);
-            future::ready(())
-        })
-        .await
-    });
-
-    let mut timer = node
-        .create_wall_timer(std::time::Duration::from_millis(2500))
-        .unwrap();
-    let state_t2 = state;
-    task::spawn(async move {
-        loop {
-            let time_passed = timer.tick().await.unwrap();
-            let x = state_t2.lock().unwrap().state;
-            println!(
-                "timer event. time passed: {}. shared state is {}",
-                time_passed.as_micros(),
-                x
-            );
-        }
-    });
-
-    // here we spin the node in its own thread (but we could just busy wait in this thread)
     let handle = std::thread::spawn(move || loop {
         node.spin_once(std::time::Duration::from_millis(100));
     });
