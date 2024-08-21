@@ -4,22 +4,6 @@ use r2r::QosProfile;
 use std::time::Duration;
 use tokio::task;
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy)]
-struct Serial {
-    x: f32,
-    y: f32,
-    angle: f32,
-    kick: bool,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy)]
-union SerialData {
-    serial: Serial,
-    buffer: [u8; size_of::<Serial>()],
-}
-
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = r2r::Context::create()?;
@@ -34,7 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             println!("{}", p.port_name);
         }
 
-        let mut port = serialport::new("/dev/ttyTCU0", 115200)
+        let mut port = serialport::new("/dev/ttyTHS1", 115200)
             .timeout(Duration::from_millis(10))
             .open()
             .expect("Failed to open port");
@@ -44,22 +28,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(msg) => {
                     println!("{:#?}", msg);
 
-                    let serial = Serial {
-                        x: msg.linear.x as f32,
-                        y: msg.linear.z as f32,
-                        angle: msg.angular.z as f32,
+                    let msgpack = nv1_msg::HubMsgPackRx {
+                        vel: nv1_msg::Velocity {
+                            linear_x: msg.linear.z as f32,
+                            linear_y: msg.linear.x as f32,
+                            angular_z: msg.angular.z as f32,
+                        },
                         kick: false,
                     };
 
-                    let encode = SerialData { serial: serial };
+                    let msgpack_decoded = corepack::to_bytes(msgpack).unwrap();
 
                     let mut cobs_encoded = [0u8; 64];
-                    let encode_len =
-                        corncobs::encode_buf(&unsafe { encode.buffer }, &mut cobs_encoded);
+                    let encode_len = corncobs::encode_buf(&msgpack_decoded, &mut cobs_encoded);
 
                     port.write(&cobs_encoded[..encode_len]).unwrap();
 
-                    println!("{:?}", &cobs_encoded[..encode_len])
+                    println!("Len: {encode_len}, Data: {:?}", &cobs_encoded[..encode_len],)
                 }
                 None => break,
             }
