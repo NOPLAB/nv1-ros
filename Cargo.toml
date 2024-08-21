@@ -1,3 +1,6 @@
 [workspace]
 resolver = "2"
 members = ["nv1-ros-communicator", "nv1-ros-onnx"]
+
+[workspace.dependencies]
+r2r = "0.9.0"
