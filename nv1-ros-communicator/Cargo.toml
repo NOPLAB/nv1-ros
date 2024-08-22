@@ -4,12 +4,12 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-nv1-msg = { version = "0.1.1", git = "https://github.com/NOPLAB/nv1-msg" }
+nv1-msg = { version = "0.1.3", git = "https://github.com/NOPLAB/nv1-msg" }
 
 corncobs = "0.1.3"
 futures = "0.3.30"
 r2r.workspace = true
 serialport = "4.5.0"
 tokio = { version = "1.39.3", features = ["full"] }
-corepack = "0.4.1"
 system_shutdown = "4.0.1"
+postcard = { version = "1.0.10", features = ["use-std"] }

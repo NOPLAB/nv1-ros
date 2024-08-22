@@ -1,8 +1,8 @@
-use futures::stream::StreamExt;
+use futures::{lock::Mutex, stream::StreamExt};
 use r2r::QosProfile;
 
-use std::time::Duration;
-use tokio::task;
+use std::{cell::RefCell, sync::Arc, time::Duration};
+use tokio::{select, task};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,42 +12,96 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut sub_teleop =
         node.subscribe::<r2r::geometry_msgs::msg::Twist>("/cmd_vel", QosProfile::default())?;
 
-    task::spawn(async move {
-        let ports = serialport::available_ports().expect("No ports found!");
-        for p in ports {
-            println!("{}", p.port_name);
-        }
+    let ports = serialport::available_ports().expect("No ports found!");
+    for p in ports {
+        println!("{}", p.port_name);
+    }
 
-        let mut port = serialport::new("/dev/ttyTHS1", 115200)
-            .timeout(Duration::from_millis(10))
+    let port = Arc::new(Mutex::new(
+        serialport::new("/dev/ttyTHS1", 115200)
+            .timeout(Duration::from_millis(5))
             .open()
-            .expect("Failed to open port");
+            .expect("Failed to open port"),
+    ));
 
+    let port_task = port.clone();
+    task::spawn(async move {
         loop {
-            match sub_teleop.next().await {
-                Some(msg) => {
-                    println!("{:#?}", msg);
+            let cmd_vel = sub_teleop.next().await;
+            match cmd_vel {
+                Some(cmd_vel) => {
+                    println!("{:#?}", cmd_vel);
 
-                    let msgpack = nv1_msg::HubMsgPackRx {
-                        vel: nv1_msg::Velocity {
-                            linear_x: msg.linear.z as f32,
-                            linear_y: msg.linear.x as f32,
-                            angular_z: msg.angular.z as f32,
+                    let send_msg = nv1_msg::hub::HubMsgPackRx {
+                        vel: nv1_msg::hub::Velocity {
+                            x: cmd_vel.linear.z as f32,
+                            y: cmd_vel.linear.x as f32,
+                            angle: cmd_vel.angular.z as f32,
                         },
                         kick: false,
                     };
 
-                    let msgpack_decoded = corepack::to_bytes(msgpack).unwrap();
+                    let msg_cobs = postcard::to_stdvec_cobs(&send_msg).unwrap();
 
-                    let mut cobs_encoded = [0u8; 64];
-                    let encode_len = corncobs::encode_buf(&msgpack_decoded, &mut cobs_encoded);
+                    port_task.lock().await.write(&msg_cobs).unwrap();
 
-                    port.write(&cobs_encoded[..encode_len]).unwrap();
+                    println!(
+                        "[UART TX] send Len: {}, Data: {:?}",
+                        msg_cobs.len(),
+                        msg_cobs
+                    );
 
-                    println!("Len: {encode_len}, Data: {:?}", &cobs_encoded[..encode_len],)
+                    // let mut msg_decode_test = msg_cobs.clone();
+                    // let msg_decoded = postcard::from_bytes_cobs::<nv1_msg::hub::HubMsgPackRx>(
+                    //     &mut msg_decode_test,
+                    // )
+                    // .unwrap();
+                    // println!("{:#?}", msg_decoded);
                 }
                 None => break,
             }
+        }
+    });
+
+    let port_task = port.clone();
+    task::spawn(async move {
+        const HUB_MSG_TX_SIZE: usize = 42;
+
+        loop {
+            let mut buf = [0; HUB_MSG_TX_SIZE];
+            let res = port_task.lock().await.read(&mut buf);
+            match res {
+                Ok(n) => {
+                    if n != HUB_MSG_TX_SIZE {
+                        println!("Read error: {}", n);
+                        continue;
+                    }
+
+                    match postcard::from_bytes_cobs::<nv1_msg::hub::HubMsgPackTx>(&mut buf) {
+                        Ok(msg) => {
+                            println!("{:#?}", msg);
+
+                            if msg.shutdown {
+                                println!("System Shutdown...");
+                                system_shutdown::shutdown().unwrap();
+                            }
+
+                            if msg.reboot {
+                                println!("System Reboot...");
+                                system_shutdown::reboot().unwrap();
+                            }
+                        }
+                        Err(_) => {
+                            println!("Decode error");
+                        }
+                    };
+                }
+                Err(err) => {
+                    // println!("Read error: {}", err);
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                    continue;
+                }
+            };
         }
     });
 
