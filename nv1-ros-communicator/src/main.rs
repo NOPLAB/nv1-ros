@@ -1,8 +1,8 @@
 use futures::{lock::Mutex, stream::StreamExt};
 use r2r::QosProfile;
 
-use std::{cell::RefCell, sync::Arc, time::Duration};
-use tokio::{select, task};
+use std::{sync::Arc, time::Duration};
+use tokio::task;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
