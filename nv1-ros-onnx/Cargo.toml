@@ -7,7 +7,6 @@ edition = "2021"
 r2r.workspace = true
 futures.workspace = true
 tokio.workspace = true
-anyhow.workspace = true
 
 cudarc = { version = "0.11.8", features = ["cuda-version-from-build-system"] }
 ndarray = "0.16.1"

@@ -7,7 +7,7 @@ use r2r::QosProfile;
 use tokio::{join, task};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = r2r::Context::create()?;
     let mut node = r2r::Node::create(ctx, "nv1_ros_onnx", "")?;
 

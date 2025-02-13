@@ -1,6 +1,5 @@
 use core::panic;
 
-use anyhow::Ok;
 use opencv::{
     core::{GpuMat, Point, Scalar, Size, Stream, VecN, Vector},
     cudaarithm, cudaimgproc, highgui, imgproc,
@@ -31,16 +30,13 @@ fn gstreamer_pipeline(
 }
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = r2r::Context::create()?;
     let mut node = r2r::Node::create(ctx, "nv1_ros_opencv", "")?;
 
     let opencv_handle = task::spawn(async move {
         let window_tuner = "opencv tuner";
         highgui::named_window(window_tuner, 0)?;
-
-        let window_camera = "opencv camera";
-        highgui::named_window(window_camera, 0)?;
 
         let mut h_min = 0;
         highgui::create_trackbar("H_min", &window_tuner, Some(&mut h_min), 255, None)?;
