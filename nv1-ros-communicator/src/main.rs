@@ -1,10 +1,7 @@
 use futures::{lock::Mutex, stream::StreamExt};
 use r2r::QosProfile;
 
-use std::{
-    sync::Arc,
-    time::{self, Duration},
-};
+use std::{cell::RefCell, sync::Arc, time::Duration};
 use tokio::task;
 
 #[tokio::main]
@@ -14,6 +11,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut sub_teleop =
         node.subscribe::<r2r::geometry_msgs::msg::Twist>("/cmd_vel", QosProfile::sensor_data())?;
+
+    unsafe {
+        let status = jetgpio_sys::gpioInitialise();
+        println!("gpioInitialise {}", status);
+        let status = jetgpio_sys::gpioSetMode(32, jetgpio_sys::JET_OUTPUT);
+        println!("gpioSetMode {}", status);
+    }
 
     let ports = serialport::available_ports().expect("No ports found!");
     for p in ports {
@@ -27,6 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .expect("Failed to open port"),
     ));
 
+    let have_ball = Arc::new(Mutex::new(RefCell::new(false)));
     let port_task = port.clone();
     task::spawn(async move {
         loop {
@@ -41,25 +46,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             y: cmd_vel.linear.y as f32,
                             angle: cmd_vel.angular.z as f32,
                         },
-                        kick: false,
+                        kick: false, // dont use
                     };
 
                     let msg_cobs = postcard::to_stdvec_cobs(&send_msg).unwrap();
 
                     port_task.lock().await.write(&msg_cobs).unwrap();
-
-                    // println!(
-                    //     "[UART TX] send Len: {}, Data: {:?}",
-                    //     msg_cobs.len(),
-                    //     msg_cobs
-                    // );
-
-                    // let mut msg_decode_test = msg_cobs.clone();
-                    // let msg_decoded = postcard::from_bytes_cobs::<nv1_msg::hub::HubMsgPackRx>(
-                    //     &mut msg_decode_test,
-                    // )
-                    // .unwrap();
-                    // println!("{:#?}", msg_decoded);
                 }
                 None => break,
             }
@@ -74,10 +66,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         "/nv1/ir",
         QosProfile::sensor_data(),
     )?;
+    let pub_have_ball = node.create_publisher::<r2r::std_msgs::msg::Bool>(
+        "/nv1/have_ball",
+        QosProfile::sensor_data(),
+    )?;
 
+    let have_ball_task = have_ball.clone();
     let port_task = port.clone();
     task::spawn(async move {
         const HUB_MSG_TX_SIZE: usize = 42;
+        let mut prev_kick = false;
 
         loop {
             let buffer_len = port_task.lock().await.bytes_to_read().unwrap();
@@ -136,8 +134,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 z: ir_strength,
                             };
 
+                            have_ball_task.lock().await.replace(msg.have_ball);
+
+                            let pub_msg_have_ball = r2r::std_msgs::msg::Bool {
+                                data: msg.have_ball,
+                            };
+
+                            if msg.have_ball && msg.vel.angle.abs() < 2.0 {
+                                if !prev_kick {
+                                    unsafe {
+                                        let _status = jetgpio_sys::gpioWrite(32, 1);
+                                    }
+
+                                    tokio::time::sleep(Duration::from_millis(100)).await;
+
+                                    unsafe {
+                                        let _status = jetgpio_sys::gpioWrite(32, 0);
+                                    }
+                                }
+
+                                prev_kick = true;
+                            } else {
+                                prev_kick = false;
+                            }
+
                             pub_speed.publish(&pub_msg_speed).unwrap();
                             pub_ir.publish(&pub_msg_ir).unwrap();
+                            pub_have_ball.publish(&pub_msg_have_ball).unwrap();
                         }
                         Err(_) => {
                             println!("Decode error");
@@ -151,41 +174,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
 
-    let mut sub_kicker =
-        node.subscribe::<r2r::std_msgs::msg::Bool>("/nv1/kicker", QosProfile::sensor_data())?;
-
-    task::spawn(async move {
-        unsafe {
-            let status = jetgpio_sys::gpioInitialise();
-            println!("gpioInitialise {}", status);
-            let status = jetgpio_sys::gpioSetMode(32, jetgpio_sys::JET_OUTPUT);
-            println!("gpioSetMode {}", status);
-        }
-
-        let mut use_time = time::Instant::now();
-
-        loop {
-            match sub_kicker.next().await {
-                Some(kicker) => {
-                    // println!("{:#?}", kicker);
-
-                    if kicker.data && time::Instant::now() > use_time + Duration::from_millis(100) {
-                        use_time = time::Instant::now();
-                        unsafe {
-                            let _status = jetgpio_sys::gpioWrite(32, 1);
-                        }
-
-                        tokio::time::sleep(Duration::from_millis(100)).await;
-
-                        unsafe {
-                            let _status = jetgpio_sys::gpioWrite(32, 0);
-                        }
-                    }
-                }
-                None => break,
-            }
-        }
-    });
+    // let mut sub_kicker =
+    //     node.subscribe::<r2r::std_msgs::msg::Bool>("/nv1/kicker", QosProfile::sensor_data())?;
 
     let handle = std::thread::spawn(move || loop {
         node.spin_once(std::time::Duration::from_millis(100));

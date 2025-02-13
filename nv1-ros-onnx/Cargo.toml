@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-futures = "0.3.30"
-r2r = "0.9.0"
-tokio = { version = "1.39.3", features = ["full"] }
+r2r.workspace = true
+futures.workspace = true
+tokio.workspace = true
+anyhow.workspace = true
+
+cudarc = { version = "0.11.8", features = ["cuda-version-from-build-system"] }
+ndarray = "0.16.1"
+ort = { version = "2.0.0-rc.5", features = ["load-dynamic", "cuda"] }
