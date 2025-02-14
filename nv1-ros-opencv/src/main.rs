@@ -67,17 +67,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?;
 
             let cap_front = videoio::VideoCapture::from_file(
-                &gstreamer_pipeline(1, 1280, 720, 1280, 720, 60, 2),
+                &gstreamer_pipeline(1, 720, 480, 720, 480, 60, 2),
                 videoio::CAP_GSTREAMER,
             )?;
 
             let cap_rear = videoio::VideoCapture::from_file(
-                &gstreamer_pipeline(0, 1280, 720, 1280, 720, 60, 2),
+                &gstreamer_pipeline(0, 720, 480, 720, 480, 60, 2),
                 videoio::CAP_GSTREAMER,
             )?;
 
             let mut processor_front = OpenCVProcessor::new(cap_front)?;
-            let mut processor_rear = OpenCVProcessor::new(cap_rear)?;
+            // let mut processor_rear = OpenCVProcessor::new(cap_rear)?;
 
             loop {
                 let processor_front_result = processor_front.process(
@@ -89,19 +89,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     v_max as f64,
                     area_threshold,
                 )?;
-                let processor_rear_result = processor_rear.process(
-                    h_min as f64,
-                    s_min as f64,
-                    v_min as f64,
-                    h_max as f64,
-                    s_max as f64,
-                    v_max as f64,
-                    area_threshold,
-                )?;
+                // let processor_rear_result = processor_rear.process(
+                //     h_min as f64,
+                //     s_min as f64,
+                //     v_min as f64,
+                //     h_max as f64,
+                //     s_max as f64,
+                //     v_max as f64,
+                //     area_threshold,
+                // )?;
 
                 for rect in processor_front_result {
                     imgproc::rectangle(
-                        &mut processor_front.frame_result,
+                        &mut processor_front.frame_masked,
                         rect,
                         Scalar::new(0.0, 255.0, 0.0, 0.0),
                         2,
@@ -109,19 +109,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         0,
                     )?;
                 }
-                for rect in processor_rear_result {
-                    imgproc::rectangle(
-                        &mut processor_rear.frame_result,
-                        rect,
-                        Scalar::new(0.0, 255.0, 0.0, 0.0),
-                        2,
-                        8,
-                        0,
-                    )?;
-                }
+                // for rect in processor_rear_result {
+                //     imgproc::rectangle(
+                //         &mut processor_rear.frame_result,
+                //         rect,
+                //         Scalar::new(0.0, 255.0, 0.0, 0.0),
+                //         2,
+                //         8,
+                //         0,
+                //     )?;
+                // }
 
                 highgui::imshow(&window_front, &processor_front.frame_result)?;
-                highgui::imshow(&window_rear, &processor_rear.frame_result)?;
+                // highgui::imshow(&window_rear, &processor_rear.frame_result)?;
 
                 let key = opencv::highgui::wait_key(1)?;
                 if key == 27 {
@@ -149,6 +149,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 pub struct OpenCVProcessor {
     capture: VideoCapture,
+    stream: Stream,
     gpu_frame: GpuMat,
     gpu_frame_yuv: GpuMat,
     gpu_frame_yuv_split: Vector<GpuMat>,
@@ -168,6 +169,7 @@ impl OpenCVProcessor {
     pub fn new(capture: VideoCapture) -> Result<Self, opencv::Error> {
         Ok(OpenCVProcessor {
             capture,
+            stream: Stream::default()?,
             gpu_frame: GpuMat::new_def()?,
             gpu_frame_yuv: GpuMat::new_def()?,
             gpu_frame_yuv_split: Vector::new(),
@@ -198,14 +200,12 @@ impl OpenCVProcessor {
         self.capture.read(&mut frame)?;
         self.gpu_frame.upload(&frame)?;
 
-        let mut stream = Stream::default()?;
-
         cudaimgproc::cvt_color(
             &self.gpu_frame,
             &mut self.gpu_frame_yuv,
             imgproc::COLOR_RGB2YUV,
             0,
-            &mut stream,
+            &mut self.stream,
         )?;
 
         let mut clahe = cudaimgproc::create_clahe(2.0, Size::new(8, 8))?;
@@ -213,7 +213,7 @@ impl OpenCVProcessor {
         cudaarithm::split_1(
             &self.gpu_frame_yuv,
             &mut self.gpu_frame_yuv_split,
-            &mut stream,
+            &mut self.stream,
         )?;
 
         let mut gpu_frame_front_channel_clahed = GpuMat::new_def()?;
@@ -221,7 +221,7 @@ impl OpenCVProcessor {
             &mut clahe,
             &self.gpu_frame_yuv_split.get(2)?,
             &mut gpu_frame_front_channel_clahed,
-            &mut stream,
+            &mut self.stream,
         )?;
 
         self.gpu_frame_yuv_split
@@ -229,7 +229,7 @@ impl OpenCVProcessor {
         cudaarithm::merge_1(
             &self.gpu_frame_yuv_split,
             &mut self.gpu_frame_yuv,
-            &mut stream,
+            &mut self.stream,
         )?;
 
         cudaimgproc::cvt_color(
@@ -237,7 +237,7 @@ impl OpenCVProcessor {
             &mut self.gpu_frame_rgb_clahed,
             imgproc::COLOR_YUV2RGB,
             0,
-            &mut stream,
+            &mut self.stream,
         )?;
 
         cudaimgproc::cvt_color(
@@ -245,7 +245,7 @@ impl OpenCVProcessor {
             &mut self.gpu_frame_hsv_clahed,
             imgproc::COLOR_RGB2HSV,
             0,
-            &mut stream,
+            &mut self.stream,
         )?;
 
         cudaarithm::in_range(
@@ -253,23 +253,23 @@ impl OpenCVProcessor {
             VecN::new(h_min, s_min, v_min, 0.0),
             VecN::new(h_max, s_max, v_max, 0.0),
             &mut self.gpu_frame_masked,
-            &mut stream,
+            &mut self.stream,
         )?;
         cudaarithm::bitwise_not(
             &self.gpu_frame,
             &mut self.gpu_frame_tmp,
             &self.gpu_frame_masked,
-            &mut stream,
+            &mut self.stream,
         )?;
 
         cudaarithm::bitwise_not(
             &self.gpu_frame_tmp,
             &mut self.gpu_frame_result,
             &self.gpu_frame_masked,
-            &mut stream,
+            &mut self.stream,
         )?;
 
-        stream.wait_for_completion()?;
+        self.stream.wait_for_completion()?;
 
         self.gpu_frame_result.download(&mut self.frame_result)?;
 
