@@ -114,7 +114,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     h_max as f64,
                     s_max as f64,
                     v_max as f64,
-                    area_threshold,
                 )?;
                 // let processor_rear_result = processor_rear.process(
                 //     h_min as f64,
@@ -123,7 +122,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 //     h_max as f64,
                 //     s_max as f64,
                 //     v_max as f64,
-                //     area_threshold,
                 // )?;
 
                 if let Some(rect) = processor_front_result {
@@ -220,7 +218,6 @@ impl OpenCVProcessor {
         h_max: f64,
         s_max: f64,
         v_max: f64,
-        area_threshold: i32,
     ) -> Result<Option<opencv::core::Rect>, opencv::Error> {
         let mut frame = Mat::default();
         self.capture.read(&mut frame)?;
