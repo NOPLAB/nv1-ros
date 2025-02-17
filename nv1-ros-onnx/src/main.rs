@@ -1,13 +1,25 @@
 use std::{collections::VecDeque, time::Duration};
 
+use clap::Parser;
 use futures::StreamExt;
 use ndarray::Array;
 use ort::{CUDAExecutionProvider, GraphOptimizationLevel, Session, SessionOutputs};
 use r2r::QosProfile;
 use tokio::{join, task};
 
+#[derive(Debug, Parser)]
+struct Args {
+    #[clap(long)]
+    dylib: String,
+
+    #[clap(long)]
+    model: String,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
+
     let ctx = r2r::Context::create()?;
     let mut node = r2r::Node::create(ctx, "nv1_ros_onnx", "")?;
 
@@ -28,8 +40,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .create_wall_timer(Duration::from_millis(1000 / 50))
         .unwrap();
     task::spawn(async move {
-        let dylib_path = "/opt/onnxruntime/build/Linux/Release/libonnxruntime.so";
-        ort::init_from(dylib_path)
+        ort::init_from(args.dylib)
             .with_execution_providers([CUDAExecutionProvider::default().build()])
             .commit()
             .unwrap();
@@ -40,7 +51,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .unwrap()
             .with_intra_threads(4)
             .unwrap()
-            .commit_from_file("/home/jetson/robocup/nv1-ros/model_v94.onnx")
+            .commit_from_file(args.model)
             .unwrap();
 
         const COLLECT_VECTOR: usize = 1;
