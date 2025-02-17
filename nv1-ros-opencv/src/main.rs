@@ -6,6 +6,7 @@ use opencv::{
     prelude::*,
     videoio::{self, VideoCapture},
 };
+use r2r::QosProfile;
 use tokio::{select, task};
 
 fn gstreamer_pipeline(
@@ -33,6 +34,32 @@ fn gstreamer_pipeline(
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = r2r::Context::create()?;
     let mut node = r2r::Node::create(ctx, "nv1_ros_opencv", "")?;
+
+    let mut pub_nv1_opencv_own = node.create_publisher::<r2r::std_msgs::msg::Float64>(
+        "/nv1/opencv/own",
+        QosProfile::sensor_data(),
+    )?;
+    let mut pub_nv1_opencv_opp = node.create_publisher::<r2r::std_msgs::msg::Float64>(
+        "/nv1/opencv/opp",
+        QosProfile::sensor_data(),
+    )?;
+
+    let mut sub_nv1_opencv_h_min =
+        node.subscribe::<r2r::std_msgs::msg::Int32>("/nv1/opencv/h_min", QosProfile::default())?;
+    let mut sub_nv1_opencv_h_max =
+        node.subscribe::<r2r::std_msgs::msg::Int32>("/nv1/opencv/h_max", QosProfile::default())?;
+    let mut sub_nv1_opencv_s_min =
+        node.subscribe::<r2r::std_msgs::msg::Int32>("/nv1/opencv/s_min", QosProfile::default())?;
+    let mut sub_nv1_opencv_s_max =
+        node.subscribe::<r2r::std_msgs::msg::Int32>("/nv1/opencv/s_max", QosProfile::default())?;
+    let mut sub_nv1_opencv_v_min =
+        node.subscribe::<r2r::std_msgs::msg::Int32>("/nv1/opencv/v_min", QosProfile::default())?;
+    let mut sub_nv1_opencv_v_max =
+        node.subscribe::<r2r::std_msgs::msg::Int32>("/nv1/opencv/v_max", QosProfile::default())?;
+    let mut sub_nv1_opencv_area_threshold = node.subscribe::<r2r::std_msgs::msg::Int32>(
+        "/nv1/opencv/area_threshold",
+        QosProfile::default(),
+    )?;
 
     let opencv_handle: tokio::task::JoinHandle<std::result::Result<(), opencv::Error>> =
         task::spawn(async move {
@@ -99,9 +126,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 //     area_threshold,
                 // )?;
 
-                for rect in processor_front_result {
+                if let Some(rect) = processor_front_result {
                     imgproc::rectangle(
-                        &mut processor_front.frame_masked,
+                        &mut processor_front.frame_result,
                         rect,
                         Scalar::new(0.0, 255.0, 0.0, 0.0),
                         2,
@@ -109,6 +136,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         0,
                     )?;
                 }
+
                 // for rect in processor_rear_result {
                 //     imgproc::rectangle(
                 //         &mut processor_rear.frame_result,
@@ -156,7 +184,6 @@ pub struct OpenCVProcessor {
     gpu_frame_rgb_clahed: GpuMat,
     gpu_frame_hsv_clahed: GpuMat,
     gpu_frame_masked: GpuMat,
-    gpu_frame_tmp: GpuMat,
     gpu_frame_result: GpuMat,
     pub frame_result: Mat,
     pub frame_masked: Mat,
@@ -176,7 +203,6 @@ impl OpenCVProcessor {
             gpu_frame_rgb_clahed: GpuMat::new_def()?,
             gpu_frame_hsv_clahed: GpuMat::new_def()?,
             gpu_frame_masked: GpuMat::new_def()?,
-            gpu_frame_tmp: GpuMat::new_def()?,
             gpu_frame_result: GpuMat::new_def()?,
             frame_result: Mat::default(),
             frame_masked: Mat::default(),
@@ -195,7 +221,7 @@ impl OpenCVProcessor {
         s_max: f64,
         v_max: f64,
         area_threshold: i32,
-    ) -> Result<Vec<opencv::core::Rect>, opencv::Error> {
+    ) -> Result<Option<opencv::core::Rect>, opencv::Error> {
         let mut frame = Mat::default();
         self.capture.read(&mut frame)?;
         self.gpu_frame.upload(&frame)?;
@@ -255,15 +281,23 @@ impl OpenCVProcessor {
             &mut self.gpu_frame_masked,
             &mut self.stream,
         )?;
+
+        self.gpu_frame_result = GpuMat::new_rows_cols_with_default_def(
+            self.gpu_frame.rows(),
+            self.gpu_frame.cols(),
+            self.gpu_frame.typ()?,
+            0.into(),
+        )?;
+
         cudaarithm::bitwise_not(
             &self.gpu_frame,
-            &mut self.gpu_frame_tmp,
+            &mut self.gpu_frame_result,
             &self.gpu_frame_masked,
             &mut self.stream,
         )?;
 
         cudaarithm::bitwise_not(
-            &self.gpu_frame_tmp,
+            &self.gpu_frame_result.clone(),
             &mut self.gpu_frame_result,
             &self.gpu_frame_masked,
             &mut self.stream,
@@ -272,7 +306,6 @@ impl OpenCVProcessor {
         self.stream.wait_for_completion()?;
 
         self.gpu_frame_result.download(&mut self.frame_result)?;
-
         self.gpu_frame_masked.download(&mut self.frame_masked)?;
 
         imgproc::connected_components_with_stats_def(
@@ -282,13 +315,14 @@ impl OpenCVProcessor {
             &mut self.centroids,
         )?;
 
-        let mut detected_rects = Vec::new();
+        let mut detected_rect = None;
+        let mut max_area = 0;
         for i in 1..self.stats.rows() {
             let area = self
                 .stats
                 .at_pt::<i32>(Point::new(imgproc::CC_STAT_AREA, i))?;
 
-            if *area > area_threshold {
+            if *area > max_area {
                 let left = self
                     .stats
                     .at_pt::<i32>(Point::new(imgproc::CC_STAT_LEFT, i))?;
@@ -302,10 +336,12 @@ impl OpenCVProcessor {
                     .stats
                     .at_pt::<i32>(Point::new(imgproc::CC_STAT_HEIGHT, i))?;
                 let rect = opencv::core::Rect::new(*left, *top, *width, *height);
-                detected_rects.push(rect);
+
+                max_area = *area;
+                detected_rect = Some(rect);
             }
         }
 
-        Ok(detected_rects)
+        Ok(detected_rect)
     }
 }
