@@ -30,16 +30,20 @@ fn gstreamer_pipeline(
     )
 }
 
+fn convert_pixet_to_theta(x: i32) -> f64 {
+    (x - 360) as f64 / 6.0
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let ctx = r2r::Context::create()?;
     let mut node = r2r::Node::create(ctx, "nv1_ros_opencv", "")?;
 
-    let mut pub_nv1_opencv_own = node.create_publisher::<r2r::std_msgs::msg::Float64>(
+    let pub_nv1_opencv_own = node.create_publisher::<r2r::std_msgs::msg::Float64>(
         "/nv1/opencv/own",
         QosProfile::sensor_data(),
     )?;
-    let mut pub_nv1_opencv_opp = node.create_publisher::<r2r::std_msgs::msg::Float64>(
+    let pub_nv1_opencv_opp = node.create_publisher::<r2r::std_msgs::msg::Float64>(
         "/nv1/opencv/opp",
         QosProfile::sensor_data(),
     )?;
@@ -56,10 +60,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         node.subscribe::<r2r::std_msgs::msg::Int32>("/nv1/opencv/v_min", QosProfile::default())?;
     let mut sub_nv1_opencv_v_max =
         node.subscribe::<r2r::std_msgs::msg::Int32>("/nv1/opencv/v_max", QosProfile::default())?;
-    let mut sub_nv1_opencv_area_threshold = node.subscribe::<r2r::std_msgs::msg::Int32>(
-        "/nv1/opencv/area_threshold",
-        QosProfile::default(),
-    )?;
 
     let opencv_handle: tokio::task::JoinHandle<std::result::Result<(), opencv::Error>> =
         task::spawn(async move {
@@ -84,27 +84,28 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             highgui::create_trackbar("V_min", &window_tuner, Some(&mut v_min), 255, None)?;
             let mut v_max = 255;
             highgui::create_trackbar("V_max", &window_tuner, Some(&mut v_max), 255, None)?;
-            let mut area_threshold = 2000;
-            highgui::create_trackbar(
-                "Area Threthold",
-                &window_tuner,
-                Some(&mut area_threshold),
-                10000,
-                None,
-            )?;
+
+            h_min = 0;
+            h_max = 100;
+            s_min = 110;
+            s_max = 220;
+            v_min = 130;
+            v_max = 255;
 
             let cap_front = videoio::VideoCapture::from_file(
                 &gstreamer_pipeline(1, 720, 480, 720, 480, 60, 2),
                 videoio::CAP_GSTREAMER,
             )?;
 
-            let cap_rear = videoio::VideoCapture::from_file(
+            let _cap_rear = videoio::VideoCapture::from_file(
                 &gstreamer_pipeline(0, 720, 480, 720, 480, 60, 2),
                 videoio::CAP_GSTREAMER,
             )?;
 
             let mut processor_front = OpenCVProcessor::new(cap_front)?;
             // let mut processor_rear = OpenCVProcessor::new(cap_rear)?;
+
+            let mut goal_theta_front = 0.0;
 
             loop {
                 let processor_front_result = processor_front.process(
@@ -115,14 +116,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     s_max as f64,
                     v_max as f64,
                 )?;
-                // let processor_rear_result = processor_rear.process(
-                //     h_min as f64,
-                //     s_min as f64,
-                //     v_min as f64,
-                //     h_max as f64,
-                //     s_max as f64,
-                //     v_max as f64,
-                // )?;
 
                 if let Some(rect) = processor_front_result {
                     imgproc::rectangle(
@@ -133,21 +126,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         8,
                         0,
                     )?;
+
+                    let center_x = rect.x + rect.width / 2;
+
+                    goal_theta_front = convert_pixet_to_theta(center_x);
                 }
 
-                // for rect in processor_rear_result {
-                //     imgproc::rectangle(
-                //         &mut processor_rear.frame_result,
-                //         rect,
-                //         Scalar::new(0.0, 255.0, 0.0, 0.0),
-                //         2,
-                //         8,
-                //         0,
-                //     )?;
-                // }
+                let _ = pub_nv1_opencv_opp.publish(&r2r::std_msgs::msg::Float64 {
+                    data: goal_theta_front,
+                });
 
                 highgui::imshow(&window_front, &processor_front.frame_result)?;
-                // highgui::imshow(&window_rear, &processor_rear.frame_result)?;
 
                 let key = opencv::highgui::wait_key(1)?;
                 if key == 27 {
