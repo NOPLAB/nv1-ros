@@ -1317,6 +1317,7 @@ dependencies = [
 name = "nv1-ros-opencv"
 version = "0.1.0"
 dependencies = [
+ "clap",
  "futures",
  "opencv",
  "r2r",

@@ -1,5 +1,6 @@
 use core::panic;
 
+use clap::Parser;
 use opencv::{
     core::{GpuMat, Point, Scalar, Size, Stream, VecN, Vector},
     cudaarithm, cudaimgproc, highgui, imgproc,
@@ -34,8 +35,16 @@ fn convert_pixet_to_theta(x: i32) -> f64 {
     (x - 360) as f64 / 6.0
 }
 
+#[derive(Debug, Parser)]
+struct Args {
+    #[arg(long, default_value_t = false)]
+    display: bool,
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = Args::parse();
+
     let ctx = r2r::Context::create()?;
     let mut node = r2r::Node::create(ctx, "nv1_ros_opencv", "")?;
 
@@ -63,27 +72,29 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let opencv_handle: tokio::task::JoinHandle<std::result::Result<(), opencv::Error>> =
         task::spawn(async move {
-            let window_tuner = "opencv tuner";
-            highgui::named_window(window_tuner, 0)?;
-
-            let window_front = "opencv front";
-            highgui::named_window(&window_front, 0)?;
-
-            let window_rear = "opencv rear";
-            highgui::named_window(&window_rear, 0)?;
-
             let mut h_min = 0;
-            highgui::create_trackbar("H_min", &window_tuner, Some(&mut h_min), 255, None)?;
             let mut h_max = 255;
-            highgui::create_trackbar("H_max", &window_tuner, Some(&mut h_max), 255, None)?;
             let mut s_min = 0;
-            highgui::create_trackbar("S_min", &window_tuner, Some(&mut s_min), 255, None)?;
             let mut s_max = 255;
-            highgui::create_trackbar("S_max", &window_tuner, Some(&mut s_max), 255, None)?;
             let mut v_min = 0;
-            highgui::create_trackbar("V_min", &window_tuner, Some(&mut v_min), 255, None)?;
             let mut v_max = 255;
-            highgui::create_trackbar("V_max", &window_tuner, Some(&mut v_max), 255, None)?;
+
+            let window_tuner = "opencv tuner";
+            let window_front = "opencv front";
+            let window_rear = "opencv rear";
+
+            if args.display {
+                highgui::named_window(window_tuner, 0)?;
+                highgui::named_window(&window_front, 0)?;
+                highgui::named_window(&window_rear, 0)?;
+
+                highgui::create_trackbar("H_min", &window_tuner, Some(&mut h_min), 255, None)?;
+                highgui::create_trackbar("H_max", &window_tuner, Some(&mut h_max), 255, None)?;
+                highgui::create_trackbar("S_min", &window_tuner, Some(&mut s_min), 255, None)?;
+                highgui::create_trackbar("S_max", &window_tuner, Some(&mut s_max), 255, None)?;
+                highgui::create_trackbar("V_min", &window_tuner, Some(&mut v_min), 255, None)?;
+                highgui::create_trackbar("V_max", &window_tuner, Some(&mut v_max), 255, None)?;
+            }
 
             h_min = 0;
             h_max = 100;
@@ -136,11 +147,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     data: goal_theta_front,
                 });
 
-                highgui::imshow(&window_front, &processor_front.frame_result)?;
+                if args.display {
+                    highgui::imshow(&window_front, &processor_front.frame_result)?;
 
-                let key = opencv::highgui::wait_key(1)?;
-                if key == 27 {
-                    break;
+                    let key = opencv::highgui::wait_key(1)?;
+                    if key == 27 {
+                        break;
+                    }
                 }
             }
 

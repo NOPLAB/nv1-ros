@@ -7,5 +7,6 @@ edition = "2021"
 r2r.workspace = true
 futures.workspace = true
 tokio.workspace = true
+clap.workspace = true
 
 opencv = { version = "0.94.2", features = ["clang-runtime"] }
