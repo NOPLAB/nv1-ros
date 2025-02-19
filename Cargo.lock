@@ -1039,9 +1039,9 @@ checksum = "49f1f14873335454500d59611f1cf4a4b0f786f9ac11f4312a78e4cf2566695b"
 
 [[package]]
 name = "jetgpio-sys"
-version = "0.2.1"
+version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de3371c68708d936020c0695c2b5d7e4d27e3530a789fa838c329c9ecdfc0f84"
+checksum = "e7dfa2fe66f1040cc4558b8f1cd711f4d303ac40b9e3458827c24d9690a3fe0f"
 dependencies = [
  "bindgen 0.68.1",
  "cc",
