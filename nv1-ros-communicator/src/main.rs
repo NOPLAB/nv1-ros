@@ -40,13 +40,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 Some(cmd_vel) => {
                     // println!("{:#?}", cmd_vel);
 
-                    let send_msg = nv1_msg::hub::HubMsgPackRx {
-                        vel: nv1_msg::hub::Velocity {
+                    let send_msg = nv1_msg::hub::ToHub {
+                        vel: nv1_msg::hub::Movement {
                             x: cmd_vel.linear.x as f32,
                             y: cmd_vel.linear.y as f32,
                             angle: cmd_vel.angular.z as f32,
                         },
                         kick: false, // dont use
+                        goal_opp: None,
+                        goal_own: None,
                     };
 
                     let msg_cobs = postcard::to_stdvec_cobs(&send_msg).unwrap();
@@ -71,103 +73,158 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         QosProfile::sensor_data(),
     )?;
 
+    let pub_opencv_hsv_own = node.create_publisher::<r2r::std_msgs::msg::UInt8MultiArray>(
+        "/nv1/opencv/opp/hsv_own",
+        QosProfile::sensor_data(),
+    )?;
+    let pub_opencv_hsv_opp = node.create_publisher::<r2r::std_msgs::msg::UInt8MultiArray>(
+        "/nv1/opencv/opp/hsv_opp",
+        QosProfile::sensor_data(),
+    )?;
+
     let have_ball_task = have_ball.clone();
     let port_task = port.clone();
     task::spawn(async move {
-        const HUB_MSG_TX_SIZE: usize = 42;
         let mut prev_kick = false;
-
         loop {
-            let buffer_len = port_task.lock().await.bytes_to_read().unwrap();
-            if buffer_len < HUB_MSG_TX_SIZE as u32 {
-                // println!("Buffer len: {}", buffer_len);
-                tokio::time::sleep(Duration::from_millis(10)).await;
-                continue;
-            } else if buffer_len > HUB_MSG_TX_SIZE as u32 {
-                let mut buf = [0; 1];
-                loop {
-                    port_task.lock().await.read(&mut buf).unwrap();
-                    if buf == [0] {
-                        break;
+            let mut msg_with_cobs = [0; 64];
+            let mut c = 0;
+            let mut one_buf = [0u8; 1];
+            loop {
+                let res = port_task.lock().await.read(&mut one_buf);
+                match res {
+                    Ok(n) => {
+                        if n == 0 {
+                            continue;
+                        }
+
+                        msg_with_cobs[c] = one_buf[0];
+                        c += 1;
+
+                        if one_buf[0] == 0 {
+                            break;
+                        }
+
+                        if c >= msg_with_cobs.len() {
+                            break;
+                        }
+                    }
+                    Err(_) => {
+                        tokio::time::sleep(Duration::from_millis(10)).await;
                     }
                 }
-                continue;
             }
 
-            let mut buf = [0; HUB_MSG_TX_SIZE];
-            let res = port_task.lock().await.read(&mut buf);
-            match res {
-                Ok(n) => {
-                    if n != HUB_MSG_TX_SIZE {
-                        continue;
+            println!("{:?}", c);
+
+            match postcard::from_bytes_cobs::<nv1_msg::hub::ToJetson>(&mut msg_with_cobs) {
+                Ok(msg) => {
+                    println!("{:#?}", msg);
+
+                    if msg.sys.shutdown {
+                        println!("System Shutdown...");
+                        system_shutdown::shutdown().unwrap();
                     }
 
-                    match postcard::from_bytes_cobs::<nv1_msg::hub::HubMsgPackTx>(&mut buf) {
-                        Ok(msg) => {
-                            println!("{:#?}", msg);
+                    if msg.sys.reboot {
+                        println!("System Reboot...");
+                        system_shutdown::reboot().unwrap();
+                    }
 
-                            if msg.shutdown {
-                                println!("System Shutdown...");
-                                system_shutdown::shutdown().unwrap();
-                            }
-
-                            if msg.reboot {
-                                println!("System Reboot...");
-                                system_shutdown::reboot().unwrap();
-                            }
-
-                            let pub_msg_speed = r2r::geometry_msgs::msg::Vector3 {
-                                x: msg.vel.x as f64,
-                                y: msg.vel.y as f64,
-                                z: msg.vel.angle as f64,
-                            };
-
-                            let ir_strength = if msg.ir.strength > 2.0 {
-                                0.0
-                            } else {
-                                msg.ir.strength as f64
-                            };
-
-                            let pub_msg_ir = r2r::geometry_msgs::msg::Vector3 {
-                                x: msg.ir.x as f64,
-                                y: msg.ir.y as f64,
-                                z: ir_strength,
-                            };
-
-                            have_ball_task.lock().await.replace(msg.have_ball);
-
-                            let pub_msg_have_ball = r2r::std_msgs::msg::Bool {
-                                data: msg.have_ball,
-                            };
-
-                            if msg.have_ball && msg.vel.angle.abs() < 2.0 {
-                                if !prev_kick {
-                                    unsafe {
-                                        let _status = jetgpio_sys::gpioWrite(32, 1);
-                                    }
-
-                                    tokio::time::sleep(Duration::from_millis(100)).await;
-
-                                    unsafe {
-                                        let _status = jetgpio_sys::gpioWrite(32, 0);
-                                    }
-                                }
-
-                                prev_kick = true;
-                            } else {
-                                prev_kick = false;
-                            }
-
-                            pub_speed.publish(&pub_msg_speed).unwrap();
-                            pub_ir.publish(&pub_msg_ir).unwrap();
-                            pub_have_ball.publish(&pub_msg_have_ball).unwrap();
-                        }
-                        Err(_) => {
-                            println!("Decode error");
-                        }
+                    let pub_msg_speed = r2r::geometry_msgs::msg::Vector3 {
+                        x: msg.vel.x as f64,
+                        y: msg.vel.y as f64,
+                        z: msg.vel.angle as f64,
                     };
+
+                    let ir_strength = if msg.sensor.ir.strength > 2.0 {
+                        0.0
+                    } else {
+                        msg.sensor.ir.strength as f64
+                    };
+
+                    let pub_msg_ir = r2r::geometry_msgs::msg::Vector3 {
+                        x: msg.sensor.ir.x as f64,
+                        y: msg.sensor.ir.y as f64,
+                        z: ir_strength,
+                    };
+
+                    have_ball_task.lock().await.replace(msg.sensor.have_ball);
+
+                    let pub_msg_have_ball = r2r::std_msgs::msg::Bool {
+                        data: msg.sensor.have_ball,
+                    };
+
+                    if msg.sensor.have_ball && msg.vel.angle.abs() < 2.0 {
+                        if !prev_kick {
+                            unsafe {
+                                let _status = jetgpio_sys::gpioWrite(32, 1);
+                            }
+
+                            tokio::time::sleep(Duration::from_millis(100)).await;
+
+                            unsafe {
+                                let _status = jetgpio_sys::gpioWrite(32, 0);
+                            }
+                        }
+
+                        prev_kick = true;
+                    } else {
+                        prev_kick = false;
+                    }
+
+                    match msg.config {
+                        nv1_msg::hub::JetsonConfig::OpenCVOwn(color) => {
+                            let pub_msg = r2r::std_msgs::msg::UInt8MultiArray {
+                                data: vec![
+                                    color.h_min,
+                                    color.h_max,
+                                    color.s_min,
+                                    color.s_max,
+                                    color.v_min,
+                                    color.v_max,
+                                ],
+                                layout: r2r::std_msgs::msg::MultiArrayLayout {
+                                    dim: vec![r2r::std_msgs::msg::MultiArrayDimension {
+                                        size: 6,
+                                        ..Default::default()
+                                    }],
+                                    ..Default::default()
+                                },
+                            };
+
+                            pub_opencv_hsv_own.publish(&pub_msg).unwrap();
+                        }
+                        nv1_msg::hub::JetsonConfig::OpenCVOpp(color) => {
+                            let pub_msg = r2r::std_msgs::msg::UInt8MultiArray {
+                                data: vec![
+                                    color.h_min,
+                                    color.h_max,
+                                    color.s_min,
+                                    color.s_max,
+                                    color.v_min,
+                                    color.v_max,
+                                ],
+                                layout: r2r::std_msgs::msg::MultiArrayLayout {
+                                    dim: vec![r2r::std_msgs::msg::MultiArrayDimension {
+                                        size: 6,
+                                        ..Default::default()
+                                    }],
+                                    ..Default::default()
+                                },
+                            };
+
+                            pub_opencv_hsv_opp.publish(&pub_msg).unwrap();
+                        }
+                        _ => {}
+                    }
+
+                    pub_speed.publish(&pub_msg_speed).unwrap();
+                    pub_ir.publish(&pub_msg_ir).unwrap();
+                    pub_have_ball.publish(&pub_msg_have_ball).unwrap();
                 }
                 Err(_) => {
+                    println!("Decode error");
                     continue;
                 }
             };

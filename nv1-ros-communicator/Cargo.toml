@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-nv1-msg = { rev = "4ac8bce", git = "https://github.com/NOPLAB/nv1-msg" }
+nv1-msg = { rev = "3eaad74", git = "https://github.com/NOPLAB/nv1-msg" }
 
 r2r.workspace = true
 futures.workspace = true

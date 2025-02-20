@@ -1,6 +1,9 @@
-use core::panic;
+use std::ops::Sub;
+use std::sync::atomic::{AtomicU8, Ordering};
+use std::sync::Arc;
 
 use clap::Parser;
+use futures::StreamExt;
 use opencv::{
     core::{GpuMat, Point, Scalar, Size, Stream, VecN, Vector},
     cudaarithm, cudaimgproc, highgui, imgproc,
@@ -57,28 +60,53 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         QosProfile::sensor_data(),
     )?;
 
-    let mut sub_nv1_opencv_h_min =
-        node.subscribe::<r2r::std_msgs::msg::Int32>("/nv1/opencv/h_min", QosProfile::default())?;
-    let mut sub_nv1_opencv_h_max =
-        node.subscribe::<r2r::std_msgs::msg::Int32>("/nv1/opencv/h_max", QosProfile::default())?;
-    let mut sub_nv1_opencv_s_min =
-        node.subscribe::<r2r::std_msgs::msg::Int32>("/nv1/opencv/s_min", QosProfile::default())?;
-    let mut sub_nv1_opencv_s_max =
-        node.subscribe::<r2r::std_msgs::msg::Int32>("/nv1/opencv/s_max", QosProfile::default())?;
-    let mut sub_nv1_opencv_v_min =
-        node.subscribe::<r2r::std_msgs::msg::Int32>("/nv1/opencv/v_min", QosProfile::default())?;
-    let mut sub_nv1_opencv_v_max =
-        node.subscribe::<r2r::std_msgs::msg::Int32>("/nv1/opencv/v_max", QosProfile::default())?;
+    let sub_nv1_opencv_hsv_own = node.subscribe::<r2r::std_msgs::msg::UInt8MultiArray>(
+        "/nv1/opencv/hsv_own",
+        QosProfile::default(),
+    )?;
+    let sub_nv1_opencv_hsv_opp = node.subscribe::<r2r::std_msgs::msg::UInt8MultiArray>(
+        "/nv1/opencv/hsv_opp",
+        QosProfile::default(),
+    )?;
+
+    let h_min = Arc::new(AtomicU8::new(0));
+    let h_max = Arc::new(AtomicU8::new(255));
+    let s_min = Arc::new(AtomicU8::new(0));
+    let s_max = Arc::new(AtomicU8::new(255));
+    let v_min = Arc::new(AtomicU8::new(0));
+    let v_max = Arc::new(AtomicU8::new(255));
+
+    let h_min_c = h_min.clone();
+    let h_max_c = h_max.clone();
+    let s_min_c = s_min.clone();
+    let s_max_c = s_max.clone();
+    let v_min_c = v_min.clone();
+    let v_max_c = v_max.clone();
+    let parameter_handle = task::spawn(async move {
+        loop {
+            let msg = sub_nv1_opencv_hsv_opp.next().await;
+
+            if msg.is_none() {
+                continue;
+            }
+
+            let msg = msg.unwrap();
+
+            if msg.data.len() != 6 {
+                continue;
+            }
+
+            h_min_c.store(msg.data[0] as u8, std::sync::atomic::Ordering::Relaxed);
+            h_max_c.store(msg.data[1] as u8, std::sync::atomic::Ordering::Relaxed);
+            s_min_c.store(msg.data[2] as u8, std::sync::atomic::Ordering::Relaxed);
+            s_max_c.store(msg.data[3] as u8, std::sync::atomic::Ordering::Relaxed);
+            v_min_c.store(msg.data[4] as u8, std::sync::atomic::Ordering::Relaxed);
+            v_max_c.store(msg.data[5] as u8, std::sync::atomic::Ordering::Relaxed);
+        }
+    });
 
     let opencv_handle: tokio::task::JoinHandle<std::result::Result<(), opencv::Error>> =
         task::spawn(async move {
-            let mut h_min = 0;
-            let mut h_max = 255;
-            let mut s_min = 0;
-            let mut s_max = 255;
-            let mut v_min = 0;
-            let mut v_max = 255;
-
             let window_tuner = "opencv tuner";
             let window_front = "opencv front";
             let window_rear = "opencv rear";
@@ -88,20 +116,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 highgui::named_window(&window_front, 0)?;
                 highgui::named_window(&window_rear, 0)?;
 
-                highgui::create_trackbar("H_min", &window_tuner, Some(&mut h_min), 255, None)?;
-                highgui::create_trackbar("H_max", &window_tuner, Some(&mut h_max), 255, None)?;
-                highgui::create_trackbar("S_min", &window_tuner, Some(&mut s_min), 255, None)?;
-                highgui::create_trackbar("S_max", &window_tuner, Some(&mut s_max), 255, None)?;
-                highgui::create_trackbar("V_min", &window_tuner, Some(&mut v_min), 255, None)?;
-                highgui::create_trackbar("V_max", &window_tuner, Some(&mut v_max), 255, None)?;
+                // highgui::create_trackbar("H_min", &window_tuner, Some(&mut h_min), 255, None)?;
+                // highgui::create_trackbar("H_max", &window_tuner, Some(&mut h_max), 255, None)?;
+                // highgui::create_trackbar("S_min", &window_tuner, Some(&mut s_min), 255, None)?;
+                // highgui::create_trackbar("S_max", &window_tuner, Some(&mut s_max), 255, None)?;
+                // highgui::create_trackbar("V_min", &window_tuner, Some(&mut v_min), 255, None)?;
+                // highgui::create_trackbar("V_max", &window_tuner, Some(&mut v_max), 255, None)?;
             }
 
-            h_min = 0;
-            h_max = 100;
-            s_min = 110;
-            s_max = 220;
-            v_min = 130;
-            v_max = 255;
+            // h_min = 0;
+            // h_max = 100;
+            // s_min = 110;
+            // s_max = 220;
+            // v_min = 130;
+            // v_max = 255;
 
             let cap_front = videoio::VideoCapture::from_file(
                 &gstreamer_pipeline(1, 720, 480, 720, 480, 60, 2),
@@ -120,12 +148,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             loop {
                 let processor_front_result = processor_front.process(
-                    h_min as f64,
-                    s_min as f64,
-                    v_min as f64,
-                    h_max as f64,
-                    s_max as f64,
-                    v_max as f64,
+                    h_min.load(Ordering::Relaxed) as f64,
+                    s_min.load(Ordering::Relaxed) as f64,
+                    v_min.load(Ordering::Relaxed) as f64,
+                    h_max.load(Ordering::Relaxed) as f64,
+                    s_max.load(Ordering::Relaxed) as f64,
+                    v_max.load(Ordering::Relaxed) as f64,
                 )?;
 
                 if let Some(rect) = processor_front_result {
@@ -167,6 +195,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     select! {
+        res = parameter_handle => res?,
         res = opencv_handle => res?,
         res = ros_handle => res?,
     }
