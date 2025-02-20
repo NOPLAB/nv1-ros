@@ -74,12 +74,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
 
     let pub_opencv_hsv_own = node.create_publisher::<r2r::std_msgs::msg::UInt8MultiArray>(
-        "/nv1/opencv/opp/hsv_own",
-        QosProfile::sensor_data(),
+        "/nv1/opencv/hsv_own",
+        QosProfile::default(),
     )?;
     let pub_opencv_hsv_opp = node.create_publisher::<r2r::std_msgs::msg::UInt8MultiArray>(
-        "/nv1/opencv/opp/hsv_opp",
-        QosProfile::sensor_data(),
+        "/nv1/opencv/hsv_opp",
+        QosProfile::default(),
     )?;
 
     let have_ball_task = have_ball.clone();
