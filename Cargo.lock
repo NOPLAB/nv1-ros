@@ -575,9 +575,9 @@ dependencies = [
 
 [[package]]
 name = "cudarc"
-version = "0.13.6"
+version = "0.13.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cf16a4eaf3c5c36c9a7e4096bf8611cd963aa71d6b67162d538d7ea13befeeea"
+checksum = "4e29ce3bfa797c1183053ceb496316203ef561c183941c3c181500d9ade6daf4"
 dependencies = [
  "libloading",
 ]
@@ -1091,7 +1091,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4979f22fdb869068da03c9f7528f8297c6fd2606bc3a4affe42e6a823fdb8da4"
 dependencies = [
  "cfg-if",
- "windows-targets 0.48.5",
+ "windows-targets 0.52.6",
 ]
 
 [[package]]
