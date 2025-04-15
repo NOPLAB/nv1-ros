@@ -9,6 +9,6 @@ futures.workspace = true
 tokio.workspace = true
 clap.workspace = true
 
-cudarc = { version = "0.13.0", features = ["cuda-version-from-build-system"] }
+cudarc = { version = "0.16.0", features = ["cuda-version-from-build-system"] }
 ndarray = "0.16.1"
 ort = { version = "2.0.0-rc.5", features = ["load-dynamic", "cuda"] }
